@@ -27,165 +27,234 @@ and you will have this condition in terminal
   Would you like to install Laravel Reverb? (yes/no) [yes]
 ❯ yes
 ```
-
-2. Publish the Reverb configuration file:
-
-```bash
-php artisan reverb:install
-```
-
-3. Run database migrations:
+now add database
+2. create message model with migration:
 
 ```bash
-php artisan migrate
+php artisan make:model Message -m
 ```
-
-## Configuration
+in migration add 
 
 1. Update your `.env` file with the following Reverb configuration:
 
-```env
-BROADCAST_DRIVER=reverb
-REVERB_APP_ID=your_app_id
-REVERB_APP_KEY=your_app_key
-REVERB_APP_SECRET=your_app_secret
-REVERB_HOST="0.0.0.0"
-REVERB_PORT=8080
-REVERB_APP_DEBUG=true
-```
-
-2. Configure your broadcasting settings in `config/broadcasting.php`:
-
 ```php
-'connections' => [
-    'reverb' => [
-        'driver' => 'reverb',
-        'key' => env('REVERB_APP_KEY'),
-        'secret' => env('REVERB_APP_SECRET'),
-        'app_id' => env('REVERB_APP_ID'),
-        'options' => [
-            'host' => env('REVERB_HOST'),
-            'port' => env('REVERB_PORT', 443),
-            'scheme' => env('REVERB_SCHEME', 'https'),
-            'useTLS' => env('REVERB_SCHEME') === 'https',
-        ],
-    ],
-],
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('messages', function (Blueprint $table) {
+            $table->id();
+            $table->foreignIdFor(\App\Models\User::class)
+                ->constrained()
+                ->cascadeOnUpdate()
+                ->cascadeOnDelete();
+            $table->string('body');
+            $table->timestamps();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('messages');
+    }
+};
+
 ```
-
-## Setting Up Authentication
-
-1. Ensure your User model is properly set up with the necessary traits:
+and in message model add this
 
 ```php
 <?php
 
 namespace App\Models;
 
-use Laravel\Sanctum\HasApiTokens;
-use Illuminate\Notifications\Notifiable;
-use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class User extends Authenticatable
+class Message extends Model
 {
-    use HasApiTokens, Notifiable;
-    
-    // ... rest of your model code
+    protected $fillable = [
+        'user_id',
+        'body',
+    ];
+    public function user():BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
 }
+
 ```
 
-## Running the Server
+and in user model add this
 
-Start the Reverb server with the following command:
+```php
 
+       public function messages(): HasMany
+    {
+        return $this->hasMany(Message::class);
+    }
+```
+now add this 
 ```bash
-php artisan reverb:start
+php artisan make:event MessageSent
 ```
 
-For production use, you may want to run this as a background process or use a process manager like Supervisor.
-
-## Frontend Setup
-
-1. Install the required JavaScript dependencies:
-
-```bash
-npm install --save-dev laravel-echo pusher-js
-```
-
-2. Configure Laravel Echo in your `resources/js/bootstrap.js`:
-
-```javascript
-import Echo from 'laravel-echo';
-import Pusher from 'pusher-js';
-
-window.Pusher = Pusher;
-
-window.Echo = new Echo({
-    broadcaster: 'reverb',
-    key: import.meta.env.VITE_REVERB_APP_KEY,
-    wsHost: window.location.hostname,
-    wsPort: 8080,
-    forceTLS: false,
-    enabledTransports: ['ws', 'wss'],
-});
-```
-
-## Testing Your Setup
-
-1. Create an event:
-
-```bash
-php artisan make:event TestEvent
-```
-
-2. Update the event to implement `ShouldBroadcast`:
+now config MessageSent 
 
 ```php
 <?php
 
 namespace App\Events;
 
+use App\Models\Message;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PresenceChannel;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
 
-class TestEvent implements ShouldBroadcast
+class MessageSent implements ShouldBroadcast
 {
-    use Dispatchable, InteractsWithSockets;
+    use Dispatchable, InteractsWithSockets, SerializesModels;
 
+    /**
+     * Create a new event instance.
+     */
     public $message;
-
-    public function __construct($message)
+    public function __construct(Message $message)
     {
         $this->message = $message;
     }
 
-    public function broadcastOn()
+    /**
+     * Get the channels the event should broadcast on.
+     *
+     * @return array<int, \Illuminate\Broadcasting\Channel>
+     */
+    public function broadcastOn(): array
     {
-        return new Channel('test-channel');
+        return [
+            new Channel('public.chat'),
+        ];
+    }
+    public function broadcastWith(): array
+    {
+        return [
+          'id'=>$this->message->id,
+          'user'=>$this->message->user->only('id','name'),
+          'body'=>$this->message->body,
+          'created_at'=>$this->message->created_at->toDateTimeString(),
+        ];
     }
 }
+
+```
+make message controller
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Events\MessageSent;
+use Illuminate\Http\Request;
+
+class MessageController extends Controller
+{
+    public function store(Request $request)
+    {
+        $data = $request->validate([
+            'body' => 'required|string',
+            'user_id' => 'required|exists:users,id',
+        ]);
+        $message = auth()->user()->messages()->create($data);
+        boroadcast(new MessageSent($message))->toOthers();
+        $message->load('user');
+        return response()->json($message);
+    }
+}
+
 ```
 
-3. Listen for the event in your JavaScript:
-
-```javascript
-window.Echo.channel('test-channel')
-    .listen('.TestEvent', (e) => {
-        console.log('Test Event:', e.message);
-    });
-```
-
-4. Dispatch the event from your application:
+go to api.php
 
 ```php
-event(new TestEvent('Hello, WebSockets!'));
+Route::post('/message', [\App\Http\Controllers\Api\MessageController::class, 'store']);
+```
+test this code with blade
+got to web.php 
+```php
+Route::view('/listen', 'listen');
+Broadcast::routes();
 ```
 
-## Next Steps
+now add this code to channels.php 
+```php
+Broadcast::channel('public.chat', function ($user) {
+    return true;
+});
+```
 
-- Set up private and presence channels for authenticated users
-- Configure SSL for secure WebSocket connections in production
-- Set up horizontal scaling for your WebSocket server
-- Implement presence features for user presence tracking
+now create blade to test listen.blade.php
+```php
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Reverb Listener</title>
+    @vite('resources/js/app.js') {{-- contains Echo setup; see below --}}
+</head>
+
+<body class="font-sans antialiased">
+<h1 id="status">Waiting for messages…</h1>
+<ul id="messages"></ul>
+
+<script>
+    setTimeout(() => {
+        Echo.channel('public.chat')
+            .listen('MessageSent', e => {
+                document.getElementById('status').textContent = 'Real-time connected ✔';
+                document.getElementById('messages').insertAdjacentHTML(
+                    'beforeend',
+                    `<li><strong>${e.user.name}</strong>: <br>${e.body} <br><em>${e.time}</em></li>`
+                );
+                console.log('Event received', e);
+            });
+
+    }, 500);
+</script>
+</body>
+
+</html>
+```
+
+and here add seeder to test
+```php
+        User::factory()->create([
+            'name' => 'User1',
+            'email' => 'user1@user.com',
+        ]);
+        
+        User::factory()->create([
+            'name' => 'User2',
+            'email' => 'user2@user.com',
+        ]);
+```
+now start this command
+```bash
+php artisan reverb:start --debug
+php artisan queue:work
+```
