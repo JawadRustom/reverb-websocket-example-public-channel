@@ -1,6 +1,6 @@
-# 📡 Laravel Realtime Chat with Laravel Reverb
+# 📡 Laravel Public Realtime Chat with Laravel Reverb
 
-This comprehensive guide will walk you through setting up a real-time chat application using Laravel Reverb. By the end, you'll have a fully functional chat system with real-time message broadcasting.
+This comprehensive guide will walk you through setting up a public real-time chat application using Laravel Reverb. By the end, you'll have a fully functional chat system with real-time message broadcasting.
 
 ## 🚀 Features
 - Real-time message broadcasting
